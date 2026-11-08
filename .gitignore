@@ -1,0 +1,65 @@
+# Android & Gradle Build Artifacts
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+bin/
+gen/
+out/
+build/
+app/build/
+app/release/
+.gradle/
+*/build/
+
+# Local & Environment Configuration
+local.properties
+.env
+.env.*
+
+# Logs
+*.log
+
+# Android Studio / IntelliJ IDEA
+.idea/
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+*.iml
+*.ipr
+*.iws
+
+# Android NDK
+.externalNativeBuild
+.cxx
+
+# Keystores & Security
+*.jks
+*.keystore
+*.key
+*.pem
+*.pk8
+
+# Kotlin & Scratch
+.kotlin/
+.scratch/
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Large Video / Raw Media files
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.wav
+marketing_assets/frames/
+marketing_assets/temp_inspect/
+marketing_assets/promo_video/
+marketing_assets/youtube_shorts/

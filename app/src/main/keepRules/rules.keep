@@ -1,0 +1,12 @@
+# Add project specific R8 rules here.
+# AGP will combine all keep rule files in src/main/keepRules to pass to R8
+
+# Keep Su Yolu data models and enums
+-keep class com.turga.suyolu.data.** { *; }
+
+# ZXing & OSMDroid keep rules for release builds
+-keep class com.google.zxing.** { *; }
+-keep class com.journeyapps.barcodescanner.** { *; }
+-keep class org.osmdroid.** { *; }
+-dontwarn com.google.zxing.**
+-dontwarn org.osmdroid.**
