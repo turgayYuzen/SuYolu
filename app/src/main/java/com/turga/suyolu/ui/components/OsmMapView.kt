@@ -37,12 +37,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.turga.suyolu.data.PointType
 import com.turga.suyolu.data.RouteData
 import com.turga.suyolu.data.RoutePoint
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.BoundingBox
+import java.io.File
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
@@ -109,40 +113,72 @@ private fun MapContent(
     isFullscreen: Boolean
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Initialize OSMDroid configuration
+    // Initialize OSMDroid configuration with strict internal cache directories
     remember {
-        Configuration.getInstance().userAgentValue = context.packageName
+        try {
+            val osmCacheDir = File(context.cacheDir, "osmdroid")
+            if (!osmCacheDir.exists()) osmCacheDir.mkdirs()
+            val osmTileCache = File(osmCacheDir, "tiles")
+            if (!osmTileCache.exists()) osmTileCache.mkdirs()
+
+            Configuration.getInstance().osmdroidBasePath = osmCacheDir
+            Configuration.getInstance().osmdroidTileCache = osmTileCache
+            Configuration.getInstance().userAgentValue = context.packageName
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         true
     }
 
     var hasAutoCentered by remember { mutableStateOf(false) }
 
     val mapView = remember {
-        MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
-            setMultiTouchControls(true)
-            zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.ALWAYS)
-            controller.setZoom(17.0)
-
-            // Gezinirken parmak hareketlerinin (pan/zoom) dıştaki ScrollView tarafından kapılmasını engelle
-            setOnTouchListener { v, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                        v.parent?.requestDisallowInterceptTouchEvent(true)
+        try {
+            MapView(context).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(true)
+                zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.ALWAYS)
+                controller.setZoom(17.0)
+                setOnTouchListener { v, event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                            v.parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            v.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
                     }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        v.parent?.requestDisallowInterceptTouchEvent(false)
-                    }
+                    false
                 }
-                false
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            MapView(context)
         }
     }
 
-    DisposableEffect(Unit) {
+    // Connect MapView to Lifecycle to prevent background and transition crashes
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    try { mapView.onResume() } catch (_: Exception) {}
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    try { mapView.onPause() } catch (_: Exception) {}
+                }
+                Lifecycle.Event.ON_DESTROY -> {
+                    try { mapView.onDetach() } catch (_: Exception) {}
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
-            mapView.onDetach()
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            try { mapView.onDetach() } catch (_: Exception) {}
         }
     }
 

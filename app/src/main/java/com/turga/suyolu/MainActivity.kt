@@ -52,7 +52,11 @@ import com.turga.suyolu.ui.theme.SuYoluTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        try {
+            enableEdgeToEdge()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
         setContent {
             SuYoluTheme {
                 MainAppScreen()
