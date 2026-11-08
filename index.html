@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gizlilik Politikası (Privacy Policy) - Su Yolu</title>
+  <style>
+    :root {
+      --primary: #0284c7;
+      --primary-dark: #0369a1;
+      --primary-light: #e0f2fe;
+      --text-main: #0f172a;
+      --text-muted: #475569;
+      --bg-page: #f8fafc;
+      --bg-card: #ffffff;
+      --border: #e2e8f0;
+      --accent-green: #16a34a;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-page);
+      color: var(--text-main);
+      line-height: 1.65;
+      padding: 24px 16px;
+    }
+
+    .container {
+      max-width: 860px;
+      margin: 0 auto;
+      background: var(--bg-card);
+      border-radius: 20px;
+      box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.06);
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    .header {
+      background: linear-gradient(135deg, #075985 0%, #0369a1 50%, #0284c7 100%);
+      color: white;
+      padding: 40px 32px;
+      text-align: center;
+    }
+
+    .header-badge {
+      display: inline-block;
+      background: rgba(255, 255, 255, 0.18);
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      padding: 6px 16px;
+      border-radius: 30px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+
+    .header h1 {
+      font-size: 32px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .header p {
+      color: #e0f2fe;
+      font-size: 15px;
+    }
+
+    .lang-switcher {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      padding: 16px 24px;
+      background: #f1f5f9;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .lang-btn {
+      background: white;
+      border: 1px solid var(--border);
+      padding: 8px 20px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .lang-btn.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+      box-shadow: 0 2px 8px rgba(2, 132, 199, 0.3);
+    }
+
+    .content {
+      padding: 36px 32px;
+    }
+
+    h2 {
+      font-size: 22px;
+      color: var(--primary-dark);
+      margin-top: 32px;
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 2px solid var(--primary-light);
+    }
+
+    h3 {
+      font-size: 17px;
+      color: var(--text-main);
+      margin-top: 20px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      margin-bottom: 14px;
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+
+    ul {
+      margin-left: 20px;
+      margin-bottom: 16px;
+      color: var(--text-muted);
+    }
+
+    li {
+      margin-bottom: 6px;
+    }
+
+    .highlight-box {
+      background: #f0fdf4;
+      border-left: 4px solid var(--accent-green);
+      padding: 16px 20px;
+      border-radius: 0 12px 12px 0;
+      margin: 20px 0;
+      font-size: 14px;
+      color: #14532d;
+    }
+
+    .highlight-box strong {
+      color: #166534;
+    }
+
+    .table-container {
+      overflow-x: auto;
+      margin: 20px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      text-align: left;
+    }
+
+    th {
+      background: #f8fafc;
+      color: var(--text-main);
+      font-weight: 600;
+    }
+
+    .footer {
+      background: #f8fafc;
+      padding: 24px 32px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .footer a {
+      color: var(--primary);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .footer a:hover {
+      text-decoration: underline;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <div class="header-badge">💧 ANADOLU SU MİRASI</div>
+      <h1>Su Yolu</h1>
+      <p>Gizlilik Politikası / Privacy Policy &bull; com.turga.suyolu</p>
+    </div>
+
+    <!-- Language Selector -->
+    <div class="lang-switcher">
+      <button class="lang-btn active" onclick="switchLang('tr')">🇹🇷 Türkçe</button>
+      <button class="lang-btn" onclick="switchLang('en')">🇬🇧 English</button>
+    </div>
+
+    <!-- Content Türkçe -->
+    <div id="content-tr" class="content">
+      <div class="highlight-box">
+        <strong>Özet Beyan:</strong> Su Yolu uygulaması <strong>hiçbir kişisel bilginizi, kimlik verinizi veya konum geçmişinizi harici bir sunucuya yüklemez</strong>. Rotalar ve noktalar yalnızca kullanıcının telefon hafızasında tutulur; açık kaynaklı ve %100 çevrimdışı çalışabilen güvenli bir saha mühendisliği aracıdır.
+      </div>
+
+      <h2>1. Giriş ve Amaç</h2>
+      <p>Su Yolu ("Uygulama"), Anadolu'daki kadim çeşmelerin, su kaynaklarının, vanaların ve su boru hatlarının GPS koordinatlarıyla haritalanmasını; bu verilerin çift QR kodlu mermer/pirinç tabela şablonları (CNC DXF ve Lazer SVG formatında) ile ölümsüzleştirilmesini ve olası arızalarda canlı radarla borunun tam noktasının bulunmasını sağlayan bağımsız bir mobil uygulamadır.</p>
+
+      <h2>2. Erişilen İzinler ve Kullanım Amaçları</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>İzin Türü</th>
+              <th>Amaç ve İşlev</th>
+              <th>Veri Saklama & Paylaşım</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Hassas ve Yaklaşık Konum</strong><br><code>ACCESS_FINE_LOCATION</code><br><code>ACCESS_COARSE_LOCATION</code></td>
+              <td>1. Sahada yürürken 10 metre aralıklarla boru hattı koordinatlarını kaydetmek.<br>2. Canlı arıza radarında boru hattına ve en yakın vanaya olan metre mesafesini hesaplamak.</td>
+              <td><strong>Yalnızca cihaz hafızasında</strong> tutulur. Asla harici bir sunucuya iletilmez veya üçüncü şahıslarla paylaşılmaz.</td>
+            </tr>
+            <tr>
+              <td><strong>Ön Plan Servisi</strong><br><code>FOREGROUND_SERVICE</code><br><code>FOREGROUND_SERVICE_LOCATION</code></td>
+              <td>Kullanıcı arazide yürürken ekran kapandığında veya telefon cebe konduğunda GPS kaydının kesilmesini önlemek.</td>
+              <td>Yalnızca kayıt esnasında geçici durum bildiriminde kullanılır; kullanıcı dilediğinde "Beklet" butonuna basarak servisi durdurabilir.</td>
+            </tr>
+            <tr>
+              <td><strong>Kamera İzni</strong><br><code>CAMERA</code></td>
+              <td>Çeşme üzerindeki tabelada kazınmış olan "Boru Hattı QR Kodunu" taramak (ZXing açık kaynak kütüphanesi).</td>
+              <td>Görüntü <strong>kaydedilmez veya yüklenmez</strong>. Yalnızca QR kodu çözmek için anlık olarak kullanılır.</td>
+            </tr>
+            <tr>
+              <td><strong>Dosya Depolama</strong><br><code>WRITE_EXTERNAL_STORAGE</code></td>
+              <td>Kullanıcının ürettiği CNC (DXF), Lazer (SVG), Google Earth (KML) ve GPX dosyalarını `Downloads/SuYolu` klasörüne kaydetmek.</td>
+              <td>Dosyalar yerel olarak kullanıcının cihazında saklanır.</td>
+            </tr>
+            <tr>
+              <td><strong>İnternet Erişimi</strong><br><code>INTERNET</code></td>
+              <td>OpenStreetMap (OSM) açık kaynak uydu ve harita karolarını ekranda görüntülemek.</td>
+              <td>Harita isteği esnasında hiçbir kullanıcı kimliği veya takip bilgisi gönderilmez. Uygulama internetsiz de tam kapasite çalışır.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>3. Veri Güvenliği, Paylaşım ve Analitik</h2>
+      <ul>
+        <li><strong>Reklam Bulunmaz:</strong> Uygulama içerisinde reklam gösterilmez, reklam kimliği (GAID) toplanmaz.</li>
+        <li><strong>Takipçi / Analitik SDK Yok:</strong> Firebase Analytics, Adjust, AppsFlyer veya benzeri hiçbir kullanıcı davranışı takip mekanizması yer almaz.</li>
+        <li><strong>Veri Satışı Yok:</strong> Kullanıcı verileri kesinlikle ticari amaçla satılmaz, üçüncü taraflara kiralanmaz.</li>
+      </ul>
+
+      <h2>4. Veri Saklama ve Kullanıcı Hakları (KVKK)</h2>
+      <p>Kullanıcı, uygulama üzerinde kaydettiği tüm verilerin tek yetkilisidir. İstediğiniz an uygulama arayüzünden kayıtları silebilir veya telefonunuzun "Ayarlar > Uygulamalar > Su Yolu > Depolama > Verileri Temizle" adımlarını takip ederek tüm verileri anında ve kalıcı olarak yok edebilirsiniz.</p>
+
+      <h2>5. İletişim</h2>
+      <p>Gizlilik politikası ile ilgili her türlü soru ve talebiniz için geliştirici ile irtibata geçebilirsiniz:</p>
+      <ul>
+        <li><strong>Geliştirici:</strong> Turgay Yüzen</li>
+        <li><strong>E-Posta:</strong> <a href="mailto:turgayyuzen@gmail.com">turgayyuzen@gmail.com</a></li>
+        <li><strong>Son Güncelleme:</strong> 8 Kasım 2026</li>
+      </ul>
+    </div>
+
+    <!-- Content English -->
+    <div id="content-en" class="content hidden">
+      <div class="highlight-box">
+        <strong>Summary Statement:</strong> Su Yolu <strong>does NOT transmit any personal data, user identity, or location history to external servers</strong>. All pipeline routes and critical points are stored strictly locally on your device. It is a 100% offline-ready, open field engineering tool.
+      </div>
+
+      <h2>1. Introduction & Overview</h2>
+      <p>Su Yolu ("App") is an open-source mobile application dedicated to mapping, archiving, and locating traditional water pipelines, village fountains, valves, and natural springs using precise GPS. It provides dual-QR code marble plaque exports for CNC milling (DXF) and laser engraving (SVG), as well as a live proximity radar for excavation safety.</p>
+
+      <h2>2. Permissions and Data Processing</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Permission</th>
+              <th>Purpose & Functionality</th>
+              <th>Data Storage & Sharing</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Precise Location</strong><br><code>ACCESS_FINE_LOCATION</code><br><code>ACCESS_COARSE_LOCATION</code></td>
+              <td>1. Automatic coordinate recording every 10 meters while walking along water pipes.<br>2. Calculating real-time distance and compass bearing to the pipe and nearest valve.</td>
+              <td>Stored <strong>locally on device only</strong>. Never transmitted to external servers or third parties.</td>
+            </tr>
+            <tr>
+              <td><strong>Foreground Service</strong><br><code>FOREGROUND_SERVICE_LOCATION</code></td>
+              <td>Ensures continuous background GPS route tracking across fields while the phone is in pocket or screen locked.</td>
+              <td>Used only during active recording with a visible persistent notification. User can pause at any time.</td>
+            </tr>
+            <tr>
+              <td><strong>Camera</strong><br><code>CAMERA</code></td>
+              <td>Scanning the QR code etched on the fountain's plaque via ZXing barcode library.</td>
+              <td>Images are processed locally in real-time. <strong>No photos or videos are stored or uploaded</strong>.</td>
+            </tr>
+            <tr>
+              <td><strong>Device Storage</strong><br><code>WRITE_EXTERNAL_STORAGE</code></td>
+              <td>Saving exported CNC (.dxf), Laser (.svg), Google Earth (.kml), and GPX files into the user's `Downloads/SuYolu` folder.</td>
+              <td>Files remain strictly on user's local storage.</td>
+            </tr>
+            <tr>
+              <td><strong>Network Access</strong><br><code>INTERNET</code></td>
+              <td>Loading open-source OpenStreetMap (OSM) tiles for visual route display.</td>
+              <td>Standard HTTP tile requests without any identifiable personal data. Works 100% offline once cached.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>3. Third Parties, Analytics & Advertising</h2>
+      <ul>
+        <li><strong>No Ads:</strong> We do not show ads and do not collect Advertising IDs.</li>
+        <li><strong>No Analytics SDKs:</strong> No third-party trackers (Firebase, AppsFlyer, etc.) are included.</li>
+        <li><strong>No Data Monetization:</strong> We do not sell or monetize user data under any circumstances.</li>
+      </ul>
+
+      <h2>4. Data Retention & User Rights (GDPR)</h2>
+      <p>You have full ownership of your data. You can permanently delete all routes and markers at any time within the app or by clearing app storage via Android Settings.</p>
+
+      <h2>5. Contact Information</h2>
+      <p>If you have any questions or feedback regarding this Privacy Policy, please contact:</p>
+      <ul>
+        <li><strong>Developer:</strong> Turgay Yüzen</li>
+        <li><strong>Email:</strong> <a href="mailto:turgayyuzen@gmail.com">turgayyuzen@gmail.com</a></li>
+        <li><strong>Effective Date:</strong> November 8, 2026</li>
+      </ul>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <p>&copy; 2026 Su Yolu - Turgay Yüzen &bull; Anadolu Su Mirası Projesi</p>
+    </div>
+  </div>
+
+  <script>
+    function switchLang(lang) {
+      const trContent = document.getElementById('content-tr');
+      const enContent = document.getElementById('content-en');
+      const buttons = document.querySelectorAll('.lang-btn');
+
+      if (lang === 'tr') {
+        trContent.classList.remove('hidden');
+        enContent.classList.add('hidden');
+        buttons[0].classList.add('active');
+        buttons[1].classList.remove('active');
+      } else {
+        trContent.classList.add('hidden');
+        enContent.classList.remove('hidden');
+        buttons[0].classList.remove('active');
+        buttons[1].classList.add('active');
+      }
+    }
+  </script>
+</body>
+</html>
