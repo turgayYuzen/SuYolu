@@ -2,7 +2,6 @@ package com.turga.suyolu.algorithm
 
 import android.location.Location
 import com.turga.suyolu.data.RouteData
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -11,8 +10,9 @@ import kotlin.math.sqrt
  * yazılımsal olarak ~1.0 - 1.5 metre seviyesine indiren sinyal işleme motoru:
  *
  * 1. 2B Jeodezik Kalman Filtresi (Walking & Stationary Adaptive Process Noise)
- * 2. Ters-Varyans Ağırlıklı Nokta Ortalaması (Inverse-Variance Weighted Point Averaging)
- *    + Aykırı Değer (Outlier) Elemesi (Kritik noktalarda 10sn sabit tutarak ~1m hassasiyet)
+ * 2. Soğuk Başlangıç (Cold-Start 20m) Sapma Sıfırlayıcı
+ * 3. Ters-Varyans Ağırlıklı Nokta Ortalaması (Inverse-Variance Weighted Point Averaging)
+ *    + Aykırı Değer (Outlier) Elemesi
  */
 class GpsPrecisionFilter(
     private val walkingProcessNoiseMetersPerSec: Double = 1.4
@@ -40,20 +40,36 @@ class GpsPrecisionFilter(
     )
 
     private var isInitialized = false
+    private var initialRawAccuracy = 99f
     private var currentLat = 0.0
     private var currentLng = 0.0
-    private var varianceMetersSq = 25.0 // Başlangıç varyansı (5m^2)
+    private var varianceMetersSq = 25.0
     private var lastTimestampMs = 0L
 
-    // Son 15 saniyedeki okumaları tutan dairesel tampon (sabit dururken anlık ağırlıklı ortalama için)
+    // Son 15 saniyedeki okumaları tutan dairesel tampon
     private val recentSamples = ArrayDeque<GpsSample>()
     private val maxBufferAgeMs = 15_000L
 
     fun reset() {
         isInitialized = false
+        initialRawAccuracy = 99f
         varianceMetersSq = 25.0
         lastTimestampMs = 0L
         recentSamples.clear()
+    }
+
+    /**
+     * 10 ölçüm ortalaması alındığında Kalman filtresini doğrudan bu kesin koordinata çiviler.
+     * Böylece önceki 20 metrelik soğuk başlangıç sapmaları tamamen silinir.
+     */
+    fun anchorToExactPoint(lat: Double, lng: Double, achievedAccuracyMeters: Float) {
+        currentLat = lat
+        currentLng = lng
+        val cleanAcc = max(achievedAccuracyMeters, 0.7f)
+        varianceMetersSq = (cleanAcc * cleanAcc).toDouble()
+        initialRawAccuracy = cleanAcc
+        lastTimestampMs = System.currentTimeMillis()
+        isInitialized = true
     }
 
     /**
@@ -64,15 +80,21 @@ class GpsPrecisionFilter(
         val rawAcc = if (location.hasAccuracy()) max(location.accuracy, 0.8f) else 10.0f
         val nowMs = if (location.time > 0) location.time else System.currentTimeMillis()
 
-        // Tampona ekle ve 15 saniyeden eski örnekleri temizle
-        recentSamples.addLast(
-            GpsSample(
-                lat = location.latitude,
-                lng = location.longitude,
-                accuracyMeters = rawAcc,
-                timestampMs = nowMs
+        // Sadece makul hassasiyetli örnekleri tampona ekle (ilk 20m'lik kaba örnekler ortalamayı bozmasın)
+        if (rawAcc <= 10.0f || recentSamples.isEmpty()) {
+            // Eğer yeni gelen örnek 6m altındaysa, tampondaki 10m üstü eski kaba örnekleri temizle
+            if (rawAcc <= 6.0f) {
+                recentSamples.removeAll { it.accuracyMeters > 9.0f }
+            }
+            recentSamples.addLast(
+                GpsSample(
+                    lat = location.latitude,
+                    lng = location.longitude,
+                    accuracyMeters = rawAcc,
+                    timestampMs = nowMs
+                )
             )
-        )
+        }
         while (recentSamples.isNotEmpty() && (nowMs - recentSamples.first().timestampMs) > maxBufferAgeMs) {
             recentSamples.removeFirst()
         }
@@ -80,6 +102,7 @@ class GpsPrecisionFilter(
         if (!isInitialized) {
             currentLat = location.latitude
             currentLng = location.longitude
+            initialRawAccuracy = rawAcc
             varianceMetersSq = (rawAcc * rawAcc).toDouble()
             lastTimestampMs = nowMs
             isInitialized = true
@@ -91,11 +114,26 @@ class GpsPrecisionFilter(
             )
         }
 
+        // Soğuk Başlangıç (Cold-Start) Düzeltmesi:
+        // İlk açılışta 15-25m hassasiyetle başlayan GPS, uydulara kilitlenip <= 5.5m seviyesine indiğinde
+        // eski 20 metrelik hatalı başlangıç merkezini terk edip doğrudan yeni net uydu konumuna sıçra!
+        if (initialRawAccuracy > 9.0f && rawAcc <= 5.5f) {
+            currentLat = location.latitude
+            currentLng = location.longitude
+            initialRawAccuracy = rawAcc
+            varianceMetersSq = (rawAcc * rawAcc).toDouble()
+            lastTimestampMs = nowMs
+            return FilteredLocationResult(
+                latitude = currentLat,
+                longitude = currentLng,
+                rawAccuracyMeters = rawAcc,
+                fusedAccuracyMeters = rawAcc
+            )
+        }
+
         val dtSec = ((nowMs - lastTimestampMs).coerceAtLeast(100L)) / 1000.0
         lastTimestampMs = nowMs
 
-        // Kullanıcının hareket hızına göre adaptif süreç gürültüsü (Process Noise Q)
-        // Kullanıcı sabit duruyorsa (vana/çeşme başında) Q çok küçülür ve varyans hızla ~1 metreye yakınsar!
         val speedMetersPerSec = if (location.hasSpeed()) {
             location.speed.toDouble().coerceIn(0.15, 4.0)
         } else {
@@ -107,17 +145,11 @@ class GpsPrecisionFilter(
         val effectiveQ = max(0.25, speedMetersPerSec * walkingProcessNoiseMetersPerSec)
         varianceMetersSq += dtSec * effectiveQ * effectiveQ
 
-        // Ölçüm gürültüsü R = rawAcc^2
         val measurementVariance = (rawAcc * rawAcc).toDouble()
-
-        // Kalman Kazancı K = P / (P + R)
         val kalmanGain = varianceMetersSq / (varianceMetersSq + measurementVariance)
 
-        // Durum güncellemesi
         currentLat += kalmanGain * (location.latitude - currentLat)
         currentLng += kalmanGain * (location.longitude - currentLng)
-
-        // Varyans güncellemesi P = (1 - K) * P
         varianceMetersSq = (1.0 - kalmanGain) * varianceMetersSq
 
         val fusedAcc = sqrt(varianceMetersSq).toFloat().coerceAtLeast(0.6f)
@@ -130,15 +162,10 @@ class GpsPrecisionFilter(
         )
     }
 
-    /**
-     * Son birkaç saniye içinde sabit durulan kümedeki noktaların veya
-     * özel toplanmış örneklerin Ters-Varyans Ağırlıklı Ortalamasını (Inverse-Variance Weighted Average) alır.
-     */
     fun computeStationaryAverage(): AveragedPointResult? {
         if (recentSamples.isEmpty()) return null
         val latest = recentSamples.last()
 
-        // Son noktaya 6 metre yarıçap içinde olan (kullanıcının sabit durduğu) örnekleri filtrele
         val stationaryCluster = recentSamples.filter { s ->
             RouteData.haversineDistance(latest.lat, latest.lng, s.lat, s.lng) <= 6.0
         }
@@ -147,11 +174,6 @@ class GpsPrecisionFilter(
     }
 
     companion object {
-        /**
-         * Verilen Location listesi üzerinde Aykırı Değer (Outlier) elemesi ve
-         * Ters-Varyans Ağırlıklı Ortalama (w_i = 1 / sigma_i^2) uygular.
-         * Teorik hata düşümü: sigma_final = 1 / sqrt(sum(1 / sigma_i^2)) ≈ sigma / sqrt(N)
-         */
         fun computeWeightedAverage(locations: List<Location>): AveragedPointResult? {
             if (locations.isEmpty()) return null
             val samples = locations.map { loc ->
@@ -191,11 +213,10 @@ class GpsPrecisionFilter(
             val centerLng = initLngSum / initWeightSum
 
             // 2. Adım: Aykırı Değer (Outlier) Elemesi
-            // Merkeze olan mesafeleri sırala ve medyanın 2.2 katından uzak olan sıçramaları at
             val distances = samples.map { s ->
                 RouteData.haversineDistance(centerLat, centerLng, s.lat, s.lng)
             }.sorted()
-            val medianDist = distances[distances.size / 2].coerceAtLeast(1.2)
+            val medianDist = distances[distances.size / 2].coerceAtLeast(1.0)
             val maxAllowedDist = medianDist * 2.2
 
             val inliers = samples.filter { s ->
@@ -218,8 +239,6 @@ class GpsPrecisionFilter(
             val finalLat = weightedLat / totalWeight
             val finalLng = weightedLng / totalWeight
 
-            // İstatistiksel birleşik standart hata: 1 / sqrt(sum(1 / sigma_i^2))
-            // Korelasyon katsayısı (ardışık GPS okumaları arasındaki atmosferik korelasyon) için 1.25 güvenlik çarpanı
             val theoreticalSigma = (1.0 / sqrt(totalWeight)) * 1.25
             val achievedAccuracy = theoreticalSigma.toFloat().coerceAtLeast(0.5f)
 

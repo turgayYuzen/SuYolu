@@ -10,6 +10,7 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -141,6 +142,31 @@ fun RecordScreen(
                 ).show()
             }
         }
+    }
+
+    // 2 Aşamalı Başlangıç Noktası Kalibrasyonu (~1m Hedefi & 10 Ölçüm Ortalaması)
+    val isCalibratingStartPoint by GpsTrackingService.isCalibratingStartPoint.collectAsState()
+    val startCalibrationSamples by GpsTrackingService.startCalibrationSamples.collectAsState()
+    val startCalibrationAccuracy by GpsTrackingService.startCalibrationAccuracy.collectAsState()
+
+    var previousCalibrating by remember { mutableStateOf(false) }
+    LaunchedEffect(isCalibratingStartPoint, recordedPoints.size) {
+        if (previousCalibrating && !isCalibratingStartPoint && recordedPoints.isNotEmpty()) {
+            val startPt = recordedPoints.first()
+            val acc = startCalibrationAccuracy ?: gpsAccuracy ?: 1.0f
+            Toast.makeText(
+                context,
+                String.format(
+                    Locale.getDefault(),
+                    "🎯 %s %s sıfır sapmayla (±%.1fm) sabitlendi! Yürümeye başlayabilirsiniz.",
+                    startPt.type.symbol,
+                    startPt.type.displayName,
+                    acc
+                ),
+                Toast.LENGTH_LONG
+            ).show()
+        }
+        previousCalibrating = isCalibratingStartPoint
     }
 
     LaunchedEffect(Unit) {
@@ -594,6 +620,95 @@ fun RecordScreen(
                     enabled = !isTracking,
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+        }
+
+        // Başlangıç Noktası 1m Kalibrasyon Kartı (Soğuk Başlangıç 20m Sapmasını Önler)
+        if (isTracking && isCalibratingStartPoint) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFE3F2FD)),
+                border = BorderStroke(1.5.dp, Color(0xFF1976D2)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("🛰️", fontSize = 22.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Başlangıç Noktası Sabitleniyor (~1m Kalibrasyonu)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF0D47A1)
+                            )
+                            Text(
+                                text = if (startCalibrationSamples == 0) {
+                                    "İlk açılıştaki 20m sapmayı önlemek için uyduların ısınması ve 1 metreye inmesi bekleniyor..."
+                                } else {
+                                    "1 metre bandına ulaşıldı! 10 adet temiz ölçüm toplanıp ortalaması alınıyor..."
+                                },
+                                fontSize = 11.sp,
+                                color = Color.DarkGray,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
+
+                    LinearProgressIndicator(
+                        progress = {
+                            if (startCalibrationSamples == 0) {
+                                val acc = gpsAccuracy ?: 20f
+                                ((25f - acc) / 23f).coerceIn(0.05f, 0.45f)
+                            } else {
+                                (startCalibrationSamples / 10f).coerceIn(0.1f, 1f)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (startCalibrationSamples == 0) {
+                                val acc = gpsAccuracy ?: 20f
+                                String.format(Locale.getDefault(), "Canlı GPS: ±%.1fm (Hedef: ≤2m)", acc)
+                            } else {
+                                String.format(
+                                    Locale.getDefault(),
+                                    "Ölçüm: %d / 10 (Net: ±%.1fm)",
+                                    startCalibrationSamples,
+                                    startCalibrationAccuracy ?: 1.0f
+                                )
+                            },
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (startCalibrationSamples > 0) Color(0xFF2E7D32) else Color(0xFFE65100)
+                        )
+
+                        TextButton(
+                            onClick = {
+                                if (GpsTrackingService.forceLockStartPointNow()) {
+                                    Toast.makeText(context, "Başlangıç noktası mevcut konumla kilitlendi!", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) {
+                            Text("Beklemeden Başlat ⏩", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
 
