@@ -89,7 +89,7 @@ class GpsTrackingService : Service() {
             return
         }
 
-        // 1. 2B Jeodezik Kalman Filtresinden geçir
+        // 1. 2B Jeodezik Kalman Filtresi + Yerel DGPS Diferansiyel Düzeltmesi
         val filtered = precisionFilter.process(rawLocation)
         val fusedLoc = Location(rawLocation).apply {
             latitude = filtered.latitude
@@ -99,8 +99,35 @@ class GpsTrackingService : Service() {
 
         _currentLocation.value = fusedLoc
         _gpsAccuracyMeters.value = filtered.fusedAccuracyMeters
+        _isDgpsActive.value = filtered.differentialOffsetActive
 
-        // 2. Kritik Nokta 10sn Sabitleme (Vana / Su Gözü / Baca eklerken) açıksa örnek topla
+        val minutesSinceCalib = (filtered.timeSinceCalibrationMs / (60 * 1000L)).toInt()
+        _timeSinceCalibrationMinutes.value = minutesSinceCalib
+
+        // 5 dakikadan uzun süredir sıfırlama yapılmadıysa ve kullanıcı yürüyüşteyse uyarı tetikle
+        if (
+            _isTracking.value &&
+            _recordedPoints.value.isNotEmpty() &&
+            !_isCalibratingStartPoint.value &&
+            !_isAveragingPoint.value &&
+            !_isRecalibratingDgps.value &&
+            !_hasSnoozedReminder.value &&
+            minutesSinceCalib >= RECALIBRATION_INTERVAL_MINUTES
+        ) {
+            _needsRecalibrationPrompt.value = true
+        }
+
+        // 2. Yürüyüş Sırasında Ara Sıfırlama (DGPS Recalibration) Örneği Toplama
+        if (_isRecalibratingDgps.value && rawAcc <= 8.0f) {
+            recalibrationBuffer.add(rawLocation)
+            val avg = GpsPrecisionFilter.computeWeightedAverage(recalibrationBuffer)
+            if (avg != null) {
+                _recalibrationSampleCount.value = avg.sampleCount
+                _recalibrationAchievedAccuracy.value = avg.achievedAccuracyMeters
+            }
+        }
+
+        // 3. Kritik Nokta 10sn Sabitleme (Vana / Su Gözü / Baca eklerken) örneği toplama
         if (_isAveragingPoint.value && rawAcc <= 8.0f) {
             averagingBuffer.add(rawLocation)
             val avg = GpsPrecisionFilter.computeWeightedAverage(averagingBuffer)
@@ -117,8 +144,6 @@ class GpsTrackingService : Service() {
         if (currentPoints.isEmpty()) {
             // =========================================================================
             // 2 AŞAMALI BAŞLANGIÇ NOKTASI KALİBRASYONU (20m Soğuk Başlangıç Koruması)
-            // Aşama 1: Hassasiyet <= 1.5m seviyesine (ve ham uydu kilidi <= 6.0m) inene kadar bekle
-            // Aşama 2: Hassasiyet 1m bandına indikten sonra 10 adet temiz konumu topla ve ortalamasını al
             // =========================================================================
             _isCalibratingStartPoint.value = true
 
@@ -127,7 +152,6 @@ class GpsTrackingService : Service() {
                 (initialLockBuffer.isNotEmpty() && rawAcc <= 6.5f)
 
             if (!isHighPrecisionReached) {
-                // Henüz 20m -> 5m soğuk başlangıç aşamasında: kaba noktaları toplama, 1 metreye inmesini bekle!
                 initialLockBuffer.clear()
                 _startCalibrationSamples.value = 0
                 _startCalibrationAccuracy.value = filtered.fusedAccuracyMeters
@@ -135,14 +159,13 @@ class GpsTrackingService : Service() {
                 return
             }
 
-            // 1 metre bandına indi! Şimdi 10 adet temiz ölçüm biriktir:
             initialLockBuffer.add(rawLocation)
             val avg = GpsPrecisionFilter.computeWeightedAverage(initialLockBuffer)
             _startCalibrationSamples.value = initialLockBuffer.size
             _startCalibrationAccuracy.value = avg?.achievedAccuracyMeters ?: filtered.fusedAccuracyMeters
 
             if (initialLockBuffer.size >= TARGET_START_SAMPLE_COUNT && avg != null) {
-                lockAndSaveStartPoint(avg.latitude, avg.longitude, avg.achievedAccuracyMeters)
+                lockAndSaveStartPoint(avg.latitude, avg.longitude, avg.achievedAccuracyMeters, rawLocation)
             } else {
                 updateNotification()
             }
@@ -169,12 +192,23 @@ class GpsTrackingService : Service() {
         }
     }
 
-    private fun lockAndSaveStartPoint(lat: Double, lng: Double, achievedAcc: Float) {
-        precisionFilter.anchorToExactPoint(lat, lng, achievedAcc)
+    private fun lockAndSaveStartPoint(lat: Double, lng: Double, achievedAcc: Float, rawRef: Location? = null) {
+        val rawLat = rawRef?.latitude ?: _currentLocation.value?.latitude ?: lat
+        val rawLng = rawRef?.longitude ?: _currentLocation.value?.longitude ?: lng
+
+        precisionFilter.anchorToExactPoint(
+            lat = lat,
+            lng = lng,
+            achievedAccuracyMeters = achievedAcc,
+            instantaneousRawLat = rawLat,
+            instantaneousRawLng = rawLng
+        )
         initialLockBuffer.clear()
         _isCalibratingStartPoint.value = false
         _startCalibrationSamples.value = TARGET_START_SAMPLE_COUNT
         _startCalibrationAccuracy.value = achievedAcc
+        _needsRecalibrationPrompt.value = false
+        _hasSnoozedReminder.value = false
 
         startLat = lat
         startLng = lng
@@ -208,6 +242,8 @@ class GpsTrackingService : Service() {
         _isTracking.value = true
         _isPaused.value = false
         initialLockBuffer.clear()
+        _needsRecalibrationPrompt.value = false
+        _hasSnoozedReminder.value = false
 
         if (!isResume && _recordedPoints.value.isEmpty()) {
             precisionFilter.reset()
@@ -252,6 +288,7 @@ class GpsTrackingService : Service() {
         _isPaused.value = true
         _isCalibratingStartPoint.value = false
         cancelPrecisionAveraging()
+        cancelDgpsRecalibration()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -262,6 +299,7 @@ class GpsTrackingService : Service() {
         _isPaused.value = false
         _isCalibratingStartPoint.value = false
         cancelPrecisionAveraging()
+        cancelDgpsRecalibration()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -301,7 +339,8 @@ class GpsTrackingService : Service() {
             }
         } else {
             val statusPrefix = if (_isPaused.value) "⏸️ Beklemede" else "🟢 Kaydediliyor"
-            val accText = if (acc != null) String.format(Locale.getDefault(), " | ±%.1fm", acc) else ""
+            val dgpsTag = if (_isDgpsActive.value) " (DGPS)" else ""
+            val accText = if (acc != null) String.format(Locale.getDefault(), " | ±%.1fm%s", acc, dgpsTag) else ""
             String.format(
                 Locale.getDefault(),
                 "%s | Nokta: %d | %.1f m%s",
@@ -343,10 +382,12 @@ class GpsTrackingService : Service() {
         // Başlangıç Noktası 1m Kalibrasyon Hedefleri
         const val TARGET_START_FUSED_ACCURACY_METERS = 2.0f
         const val TARGET_START_SAMPLE_COUNT = 10
+        const val RECALIBRATION_INTERVAL_MINUTES = 5
 
         private val precisionFilter = GpsPrecisionFilter()
         private val initialLockBuffer = mutableListOf<Location>()
         private val averagingBuffer = mutableListOf<Location>()
+        private val recalibrationBuffer = mutableListOf<Location>()
 
         private var startLat: Double = 0.0
         private var startLng: Double = 0.0
@@ -388,6 +429,28 @@ class GpsTrackingService : Service() {
         private val _startCalibrationAccuracy = MutableStateFlow<Float?>(null)
         val startCalibrationAccuracy: StateFlow<Float?> = _startCalibrationAccuracy.asStateFlow()
 
+        // Yerel DGPS ve Periyodik Sıfırlama Hatırlatıcı State'leri
+        private val _isDgpsActive = MutableStateFlow(false)
+        val isDgpsActive: StateFlow<Boolean> = _isDgpsActive.asStateFlow()
+
+        private val _timeSinceCalibrationMinutes = MutableStateFlow(0)
+        val timeSinceCalibrationMinutes: StateFlow<Int> = _timeSinceCalibrationMinutes.asStateFlow()
+
+        private val _needsRecalibrationPrompt = MutableStateFlow(false)
+        val needsRecalibrationPrompt: StateFlow<Boolean> = _needsRecalibrationPrompt.asStateFlow()
+
+        private val _hasSnoozedReminder = MutableStateFlow(false)
+
+        // Yürüyüş Sırasında DGPS Sıfırlama (10sn Durarak Konum Tazeleme)
+        private val _isRecalibratingDgps = MutableStateFlow(false)
+        val isRecalibratingDgps: StateFlow<Boolean> = _isRecalibratingDgps.asStateFlow()
+
+        private val _recalibrationSampleCount = MutableStateFlow(0)
+        val recalibrationSampleCount: StateFlow<Int> = _recalibrationSampleCount.asStateFlow()
+
+        private val _recalibrationAchievedAccuracy = MutableStateFlow<Float?>(null)
+        val recalibrationAchievedAccuracy: StateFlow<Float?> = _recalibrationAchievedAccuracy.asStateFlow()
+
         // Ara Kritik Nokta Hassas Sabitleme (Point Averaging) State'leri
         private val _isAveragingPoint = MutableStateFlow(false)
         val isAveragingPoint: StateFlow<Boolean> = _isAveragingPoint.asStateFlow()
@@ -416,10 +479,6 @@ class GpsTrackingService : Service() {
             }
         }
 
-        /**
-         * Kullanıcı ağaçlık/vadi gibi 1.5m altına inemeyen bir yerdeyse,
-         * mevcut en iyi ölçümlerin ortalamasıyla başlangıç noktasını hemen kilitler.
-         */
         fun forceLockStartPointNow(): Boolean {
             val avg = GpsPrecisionFilter.computeWeightedAverage(initialLockBuffer)
                 ?: precisionFilter.computeStationaryAverage()
@@ -428,7 +487,7 @@ class GpsTrackingService : Service() {
             val finalLng = avg?.longitude ?: curr?.longitude ?: return false
             val finalAcc = avg?.achievedAccuracyMeters ?: curr?.accuracy ?: 3.0f
 
-            precisionFilter.anchorToExactPoint(finalLat, finalLng, finalAcc)
+            precisionFilter.anchorToExactPoint(finalLat, finalLng, finalAcc, finalLat, finalLng)
             initialLockBuffer.clear()
             _isCalibratingStartPoint.value = false
             _startCalibrationSamples.value = TARGET_START_SAMPLE_COUNT
@@ -446,6 +505,48 @@ class GpsTrackingService : Service() {
                 )
             )
             return true
+        }
+
+        /**
+         * 5 dakika dolduğunda kullanıcı durup "10sn Konumu Sıfırla" butonuna bastığında çağrılır.
+         */
+        fun startDgpsRecalibration() {
+            recalibrationBuffer.clear()
+            _currentLocation.value?.let { curr ->
+                recalibrationBuffer.add(curr)
+                _recalibrationSampleCount.value = 1
+                _recalibrationAchievedAccuracy.value = curr.accuracy
+            } ?: run {
+                _recalibrationSampleCount.value = 0
+                _recalibrationAchievedAccuracy.value = null
+            }
+            _isRecalibratingDgps.value = true
+            _needsRecalibrationPrompt.value = false
+        }
+
+        fun cancelDgpsRecalibration() {
+            _isRecalibratingDgps.value = false
+            recalibrationBuffer.clear()
+            _recalibrationSampleCount.value = 0
+            _recalibrationAchievedAccuracy.value = null
+        }
+
+        fun commitDgpsRecalibration(): GpsPrecisionFilter.AveragedPointResult? {
+            val avg = GpsPrecisionFilter.computeWeightedAverage(recalibrationBuffer)
+                ?: precisionFilter.computeStationaryAverage()
+            cancelDgpsRecalibration()
+            if (avg == null) return null
+
+            precisionFilter.updateDifferentialBias(avg.latitude, avg.longitude)
+            _hasSnoozedReminder.value = false
+            _needsRecalibrationPrompt.value = false
+            _timeSinceCalibrationMinutes.value = 0
+            return avg
+        }
+
+        fun snoozeRecalibrationReminder() {
+            _needsRecalibrationPrompt.value = false
+            _hasSnoozedReminder.value = true
         }
 
         fun resumeRouteService(context: Context, existingRoute: RouteData) {
@@ -512,6 +613,9 @@ class GpsTrackingService : Service() {
             _startCalibrationSamples.value = 0
             _startCalibrationAccuracy.value = null
             cancelPrecisionAveraging()
+            cancelDgpsRecalibration()
+            _needsRecalibrationPrompt.value = false
+            _hasSnoozedReminder.value = false
             _recordedPoints.value = emptyList()
             _totalDistanceMeters.value = 0.0
             _isPaused.value = false
@@ -549,6 +653,9 @@ class GpsTrackingService : Service() {
 
             if (averaged == null) return null
             precisionFilter.anchorToExactPoint(averaged.latitude, averaged.longitude, averaged.achievedAccuracyMeters)
+            _needsRecalibrationPrompt.value = false
+            _hasSnoozedReminder.value = false
+            _timeSinceCalibrationMinutes.value = 0
             savePointInternal(averaged.latitude, averaged.longitude, type, label)
             return averaged
         }

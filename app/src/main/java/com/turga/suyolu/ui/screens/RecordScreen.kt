@@ -169,6 +169,32 @@ fun RecordScreen(
         previousCalibrating = isCalibratingStartPoint
     }
 
+    // Yerel DGPS ve Periyodik Sıfırlama Hatırlatıcı State'leri
+    val isDgpsActive by GpsTrackingService.isDgpsActive.collectAsState()
+    val needsRecalibrationPrompt by GpsTrackingService.needsRecalibrationPrompt.collectAsState()
+    val timeSinceCalibrationMinutes by GpsTrackingService.timeSinceCalibrationMinutes.collectAsState()
+    val isRecalibratingDgps by GpsTrackingService.isRecalibratingDgps.collectAsState()
+    val recalibrationSampleCount by GpsTrackingService.recalibrationSampleCount.collectAsState()
+    val recalibrationAchievedAccuracy by GpsTrackingService.recalibrationAchievedAccuracy.collectAsState()
+
+    // Yürüyüş Sırasında DGPS Sıfırlama 10 örnek toplandığında otomatik tamamlama
+    LaunchedEffect(isRecalibratingDgps, recalibrationSampleCount) {
+        if (isRecalibratingDgps && recalibrationSampleCount >= 10) {
+            val res = GpsTrackingService.commitDgpsRecalibration()
+            if (res != null) {
+                Toast.makeText(
+                    context,
+                    String.format(
+                        Locale.getDefault(),
+                        "🎯 DGPS Konumu Başarıyla Sıfırlandı! (±%.1fm doğruluk)",
+                        res.achievedAccuracyMeters
+                    ),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     LaunchedEffect(Unit) {
         savedRoutes = RouteStorage.getSavedRoutes(context)
     }
@@ -572,6 +598,93 @@ fun RecordScreen(
         )
     }
 
+    // 🎯 Yürüyüş Sırasında DGPS Sıfırlama (10 Saniye Durarak Konum Tazeleme) Diyaloğu
+    if (isRecalibratingDgps) {
+        AlertDialog(
+            onDismissRequest = {
+                GpsTrackingService.cancelDgpsRecalibration()
+            },
+            title = {
+                Text(
+                    "🎯 DGPS Konumu Sıfırlanıyor (10sn)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Lütfen 10 saniye boyunca durun ve telefonu sabit tutun. Uyduların son 5 dakikadaki diferansiyel kayması sıfırlanıyor...",
+                        fontSize = 12.sp,
+                        color = Color.DarkGray
+                    )
+
+                    LinearProgressIndicator(
+                        progress = { (recalibrationSampleCount / 10f).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Ölçüm: $recalibrationSampleCount / 10",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = String.format(
+                                Locale.getDefault(),
+                                "Hassasiyet: ±%.1f m",
+                                recalibrationAchievedAccuracy ?: gpsAccuracy ?: 2.0f
+                            ),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF2E7D32)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val res = GpsTrackingService.commitDgpsRecalibration()
+                        if (res != null) {
+                            Toast.makeText(
+                                context,
+                                String.format(
+                                    Locale.getDefault(),
+                                    "🎯 DGPS Konumu Sıfırlandı! (±%.1fm)",
+                                    res.achievedAccuracyMeters
+                                ),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                ) {
+                    Text("Şimdi Sıfırla")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        GpsTrackingService.cancelDgpsRecalibration()
+                    }
+                ) {
+                    Text("İptal")
+                }
+            }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -712,6 +825,68 @@ fun RecordScreen(
             }
         }
 
+        // ⏱️ Periyodik DGPS Sıfırlama Hatırlatma Kartı (5-7 Dakikada Bir Uydular Döndüğünde)
+        if (isTracking && needsRecalibrationPrompt && !isCalibratingStartPoint) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                border = BorderStroke(1.5.dp, Color(0xFFE65100)),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("⏱️", fontSize = 22.sp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "DGPS Konum Tazeleme Zamanı ($timeSinceCalibrationMinutes dk geçti)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFFBF360C)
+                            )
+                            Text(
+                                text = "Gökyüzündeki uyduların açıları değişti. Boru hattının 1 metre hassasiyetinde kalması için 10 saniye durup sıfırlama yapabilirsiniz.",
+                                fontSize = 11.sp,
+                                color = Color.DarkGray,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = {
+                                GpsTrackingService.snoozeRecalibrationReminder()
+                            }
+                        ) {
+                            Text("Daha Sonra (Yürümeye Devam Et)", fontSize = 11.sp, color = Color.Gray)
+                        }
+
+                        Spacer(modifier = Modifier.width(6.dp))
+
+                        Button(
+                            onClick = {
+                                GpsTrackingService.startDgpsRecalibration()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100))
+                        ) {
+                            Text("🎯 10sn Dur & Sıfırla", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
         // Section 2: Live Tracking Dashboard
         val statusBgColor = when {
             isTracking -> Color(0xFFE8F5E9)
@@ -749,8 +924,9 @@ fun RecordScreen(
                             val rawText = if (rawGpsAccuracy != null) {
                                 String.format(Locale.getDefault(), " (Ham: ±%.1fm)", rawGpsAccuracy)
                             } else ""
+                            val dgpsTag = if (isDgpsActive) " • 📡 DGPS" else ""
                             Text(
-                                text = String.format(Locale.getDefault(), "🎯 Kalman GPS: ±%.1f m%s", gpsAccuracy, rawText),
+                                text = String.format(Locale.getDefault(), "🎯 Kalman GPS: ±%.1f m%s%s", gpsAccuracy, rawText, dgpsTag),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = if ((gpsAccuracy ?: 99f) <= 3.0f) Color(0xFF1B5E20) else Color(0xFFE65100)

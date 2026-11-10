@@ -2,17 +2,18 @@ package com.turga.suyolu.algorithm
 
 import android.location.Location
 import com.turga.suyolu.data.RouteData
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.sqrt
 
 /**
  * Standart telefon GPS alıcılarındaki 3-5 metrelik atmosferik/yansıma hatasını
- * yazılımsal olarak ~1.0 - 1.5 metre seviyesine indiren sinyal işleme motoru:
+ * yazılımsal olarak ~1.0 metre seviyesine indiren sinyal işleme motoru:
  *
  * 1. 2B Jeodezik Kalman Filtresi (Walking & Stationary Adaptive Process Noise)
  * 2. Soğuk Başlangıç (Cold-Start 20m) Sapma Sıfırlayıcı
  * 3. Ters-Varyans Ağırlıklı Nokta Ortalaması (Inverse-Variance Weighted Point Averaging)
- *    + Aykırı Değer (Outlier) Elemesi
+ * 4. Yerel DGPS / Diferansiyel Hata Düzeltmesi (Time-Decayed Differential Bias Correction)
  */
 class GpsPrecisionFilter(
     private val walkingProcessNoiseMetersPerSec: Double = 1.4
@@ -22,7 +23,9 @@ class GpsPrecisionFilter(
         val latitude: Double,
         val longitude: Double,
         val rawAccuracyMeters: Float,
-        val fusedAccuracyMeters: Float
+        val fusedAccuracyMeters: Float,
+        val differentialOffsetActive: Boolean = false,
+        val timeSinceCalibrationMs: Long = 0L
     )
 
     data class AveragedPointResult(
@@ -46,6 +49,13 @@ class GpsPrecisionFilter(
     private var varianceMetersSq = 25.0
     private var lastTimestampMs = 0L
 
+    // Yerel DGPS / Diferansiyel Hata Vektörü
+    // (10 ölçümlük gerçek ortalama ile anlık ham/kalman konumu arasındaki fark)
+    private var differentialBiasLat = 0.0
+    private var differentialBiasLng = 0.0
+    private var lastCalibrationTimeMs = 0L
+    private val differentialHalfLifeMs = 10.0 * 60.0 * 1000.0 // 10 dakika yarılanma ömrü
+
     // Son 15 saniyedeki okumaları tutan dairesel tampon
     private val recentSamples = ArrayDeque<GpsSample>()
     private val maxBufferAgeMs = 15_000L
@@ -55,34 +65,80 @@ class GpsPrecisionFilter(
         initialRawAccuracy = 99f
         varianceMetersSq = 25.0
         lastTimestampMs = 0L
+        differentialBiasLat = 0.0
+        differentialBiasLng = 0.0
+        lastCalibrationTimeMs = 0L
         recentSamples.clear()
     }
 
     /**
-     * 10 ölçüm ortalaması alındığında Kalman filtresini doğrudan bu kesin koordinata çiviler.
-     * Böylece önceki 20 metrelik soğuk başlangıç sapmaları tamamen silinir.
+     * 10 ölçüm ortalaması alındığında Kalman filtresini doğrudan bu koordinata sabitler
+     * ve yürüyüş için Diferansiyel DGPS sapma vektörünü tazeler.
      */
-    fun anchorToExactPoint(lat: Double, lng: Double, achievedAccuracyMeters: Float) {
+    fun anchorToExactPoint(
+        lat: Double,
+        lng: Double,
+        achievedAccuracyMeters: Float,
+        instantaneousRawLat: Double = currentLat,
+        instantaneousRawLng: Double = currentLng
+    ) {
+        val nowMs = System.currentTimeMillis()
+
+        // Diferansiyel Hata Vektörü = Gerçek Ortalama - Anlık Konum
+        if (isInitialized && instantaneousRawLat != 0.0 && instantaneousRawLng != 0.0) {
+            val deltaLat = lat - instantaneousRawLat
+            val deltaLng = lng - instantaneousRawLng
+            val distOffset = RouteData.haversineDistance(instantaneousRawLat, instantaneousRawLng, lat, lng)
+            // Mantıksız aşırı sıçramalar (> 15m) haricinde diferansiyel ofseti belleğe al
+            if (distOffset <= 15.0) {
+                differentialBiasLat = deltaLat
+                differentialBiasLng = deltaLng
+                lastCalibrationTimeMs = nowMs
+            }
+        } else {
+            differentialBiasLat = 0.0
+            differentialBiasLng = 0.0
+            lastCalibrationTimeMs = nowMs
+        }
+
         currentLat = lat
         currentLng = lng
         val cleanAcc = max(achievedAccuracyMeters, 0.7f)
         varianceMetersSq = (cleanAcc * cleanAcc).toDouble()
         initialRawAccuracy = cleanAcc
-        lastTimestampMs = System.currentTimeMillis()
+        lastTimestampMs = nowMs
         isInitialized = true
     }
 
     /**
-     * Yeni gelen ham GPS konumunu 2B Kalman filtresinden geçirir ve
-     * birleştirilmiş (fused) ~1m-1.5m hassasiyetli koordinatı döner.
+     * Kullanıcı durup "Konumu Sıfırla / Kalibre Et" dediğinde diferansiyel sapmayı tazeler.
+     */
+    fun updateDifferentialBias(exactLat: Double, exactLng: Double) {
+        val nowMs = System.currentTimeMillis()
+        if (isInitialized && currentLat != 0.0) {
+            differentialBiasLat = exactLat - currentLat
+            differentialBiasLng = exactLng - currentLng
+            lastCalibrationTimeMs = nowMs
+            currentLat = exactLat
+            currentLng = exactLng
+        }
+    }
+
+    fun getTimeSinceCalibrationMs(nowMs: Long = System.currentTimeMillis()): Long {
+        if (lastCalibrationTimeMs == 0L) return 0L
+        return (nowMs - lastCalibrationTimeMs).coerceAtLeast(0L)
+    }
+
+    /**
+     * Yeni gelen ham GPS konumunu 2B Kalman filtresinden geçirir,
+     * varsa zamana göre sönümlenen Diferansiyel DGPS düzeltmesini uygular.
      */
     fun process(location: Location): FilteredLocationResult {
         val rawAcc = if (location.hasAccuracy()) max(location.accuracy, 0.8f) else 10.0f
         val nowMs = if (location.time > 0) location.time else System.currentTimeMillis()
 
-        // Sadece makul hassasiyetli örnekleri tampona ekle (ilk 20m'lik kaba örnekler ortalamayı bozmasın)
+        // Sadece makul hassasiyetli örnekleri tampona ekle
         if (rawAcc <= 10.0f || recentSamples.isEmpty()) {
-            // Eğer yeni gelen örnek 6m altındaysa, tampondaki 10m üstü eski kaba örnekleri temizle
             if (rawAcc <= 6.0f) {
                 recentSamples.removeAll { it.accuracyMeters > 9.0f }
             }
@@ -110,13 +166,13 @@ class GpsPrecisionFilter(
                 latitude = currentLat,
                 longitude = currentLng,
                 rawAccuracyMeters = rawAcc,
-                fusedAccuracyMeters = rawAcc
+                fusedAccuracyMeters = rawAcc,
+                differentialOffsetActive = false,
+                timeSinceCalibrationMs = 0L
             )
         }
 
-        // Soğuk Başlangıç (Cold-Start) Düzeltmesi:
-        // İlk açılışta 15-25m hassasiyetle başlayan GPS, uydulara kilitlenip <= 5.5m seviyesine indiğinde
-        // eski 20 metrelik hatalı başlangıç merkezini terk edip doğrudan yeni net uydu konumuna sıçra!
+        // Soğuk Başlangıç (Cold-Start) Düzeltmesi
         if (initialRawAccuracy > 9.0f && rawAcc <= 5.5f) {
             currentLat = location.latitude
             currentLng = location.longitude
@@ -127,7 +183,9 @@ class GpsPrecisionFilter(
                 latitude = currentLat,
                 longitude = currentLng,
                 rawAccuracyMeters = rawAcc,
-                fusedAccuracyMeters = rawAcc
+                fusedAccuracyMeters = rawAcc,
+                differentialOffsetActive = false,
+                timeSinceCalibrationMs = 0L
             )
         }
 
@@ -154,11 +212,29 @@ class GpsPrecisionFilter(
 
         val fusedAcc = sqrt(varianceMetersSq).toFloat().coerceAtLeast(0.6f)
 
+        // DGPS Diferansiyel Hata Düzeltmesi (Zamanla Zarif Sönümleme / Exponential Decay)
+        var finalLat = currentLat
+        var finalLng = currentLng
+        var hasActiveDiff = false
+        val timeSinceCalib = if (lastCalibrationTimeMs > 0L) nowMs - lastCalibrationTimeMs else 0L
+
+        if (lastCalibrationTimeMs > 0L && (differentialBiasLat != 0.0 || differentialBiasLng != 0.0)) {
+            // ln(2) = 0.69314718
+            val decay = exp(-timeSinceCalib * 0.69314718 / differentialHalfLifeMs)
+            if (decay > 0.05) {
+                finalLat += differentialBiasLat * decay
+                finalLng += differentialBiasLng * decay
+                hasActiveDiff = true
+            }
+        }
+
         return FilteredLocationResult(
-            latitude = currentLat,
-            longitude = currentLng,
+            latitude = finalLat,
+            longitude = finalLng,
             rawAccuracyMeters = rawAcc,
-            fusedAccuracyMeters = fusedAcc
+            fusedAccuracyMeters = fusedAcc,
+            differentialOffsetActive = hasActiveDiff,
+            timeSinceCalibrationMs = timeSinceCalib
         )
     }
 
@@ -199,7 +275,6 @@ class GpsPrecisionFilter(
                 )
             }
 
-            // 1. Adım: Kaba ağırlıklı merkez (Centroid) bul
             var initWeightSum = 0.0
             var initLatSum = 0.0
             var initLngSum = 0.0
@@ -212,7 +287,6 @@ class GpsPrecisionFilter(
             val centerLat = initLatSum / initWeightSum
             val centerLng = initLngSum / initWeightSum
 
-            // 2. Adım: Aykırı Değer (Outlier) Elemesi
             val distances = samples.map { s ->
                 RouteData.haversineDistance(centerLat, centerLng, s.lat, s.lng)
             }.sorted()
@@ -223,7 +297,6 @@ class GpsPrecisionFilter(
                 RouteData.haversineDistance(centerLat, centerLng, s.lat, s.lng) <= maxAllowedDist
             }.ifEmpty { samples }
 
-            // 3. Adım: Kalan temiz örneklerin Ters-Varyans Ağırlıklı Ortalamasını hesapla
             var totalWeight = 0.0
             var weightedLat = 0.0
             var weightedLng = 0.0
