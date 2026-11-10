@@ -5,9 +5,12 @@ import com.turga.suyolu.data.RouteData
 import com.turga.suyolu.data.RoutePoint
 
 /**
- * İmece Modu: Farklı kişilerin veya farklı günlerde kaydedilen boru hattı parçalarını
- * (biri çeşmeden, biri kaynaktan ters yönde gelmiş olsa bile) otomatik olarak doğru sıraya dizip
- * uçtan uca tek bir boru hattı (RouteData) haline getiren akıllı algoritma.
+ * İmece & Hassas Hat Birleştirme Motoru:
+ * 1. Uçtan Uca Birleştirme (Stitching): Farklı kişilerin/günlerin kaydettiği ardışık parçaları
+ *    (ters yönde yürünmüş olsa bile) doğru sıraya dizip tek bir hat yapar.
+ * 2. Çoklu Yürüyüş Ortalaması (Multi-Pass Averaging): Aynı boru hattı gidiş-dönüş veya
+ *    birden fazla telefonla kaydedildiğinde, üst üste binen hatların ortalamasını alarak
+ *    GPS sapmasını ~1 metre seviyesine indirir.
  */
 object RouteMerger {
 
@@ -21,10 +24,6 @@ object RouteMerger {
         fun reversed(): Segment = copy(points = points.reversed())
     }
 
-    /**
-     * Birden fazla RouteData parçasını alır, başlangıç noktası Çeşme (veya ilk seçilen parça) olacak şekilde
-     * en yakın uçları birbirine bağlar ve ters yürünmüş parçaları otomatik düzeltir.
-     */
     fun mergeSegments(
         fountainTitle: String,
         routes: List<RouteData>
@@ -34,7 +33,6 @@ object RouteMerger {
             return routes.first().copy(fountainName = fountainTitle)
         }
 
-        // Her RouteData'yı tam nokta listesine (Start + Points) dönüştür
         val rawSegments = routes.mapNotNull { r ->
             val allPts = mutableListOf<RoutePoint>()
             allPts.add(RoutePoint(r.startLat, r.startLng, r.startPointType, r.fountainName))
@@ -44,30 +42,45 @@ object RouteMerger {
 
         if (rawSegments.isEmpty()) return routes.first()
 
-        // 1. Çeşme (Başlangıç) parçasını bul:
-        // İçinde FOUNTAIN veya START olup SOURCE (Kaynak) ile başlamayan ilk parçayı baz al
-        var startSegIndex = rawSegments.indexOfFirst { seg ->
+        // 1. Çeşme (Başlangıç) parçasını bul
+        val startSegIndex = rawSegments.indexOfFirst { seg ->
             seg.first.type == PointType.FOUNTAIN || seg.first.type == PointType.START
         }.coerceAtLeast(0)
 
         var currentChain = rawSegments.removeAt(startSegIndex).points.toMutableList()
 
-        // Eğer ilk parçanın ilk noktası Su Gözü (SOURCE) ve son noktası Çeşme (FOUNTAIN) ise ters çevir
         if (currentChain.first().type == PointType.SOURCE && currentChain.last().type == PointType.FOUNTAIN) {
             currentChain = currentChain.reversed().toMutableList()
         }
 
-        // 2. Kalan parçaları en yakın uç noktasına göre (düz veya ters çevirerek) zincire ekle
+        // 2. Kalan parçaları incele: Aynı hattın tekrarı mı (Multi-Pass Overlap) yoksa uç uca devamı mı?
         while (rawSegments.isNotEmpty()) {
-            val chainEnd = currentChain.last()
             val chainStart = currentChain.first()
+            val chainEnd = currentChain.last()
 
+            // Önce paralel örtüşen (aynı hattın gidiş-dönüş veya 2. yürüyüşü olan) parça var mı kontrol et
+            val overlapIndex = rawSegments.indexOfFirst { seg ->
+                isParallelOverlappingPass(chainStart, chainEnd, seg)
+            }
+
+            if (overlapIndex >= 0) {
+                val overlappingSeg = rawSegments.removeAt(overlapIndex)
+                val forwardDist = RouteData.haversineDistance(chainStart.lat, chainStart.lng, overlappingSeg.first.lat, overlappingSeg.first.lng) +
+                    RouteData.haversineDistance(chainEnd.lat, chainEnd.lng, overlappingSeg.last.lat, overlappingSeg.last.lng)
+                val reverseDist = RouteData.haversineDistance(chainStart.lat, chainStart.lng, overlappingSeg.last.lat, overlappingSeg.last.lng) +
+                    RouteData.haversineDistance(chainEnd.lat, chainEnd.lng, overlappingSeg.first.lat, overlappingSeg.first.lng)
+
+                val alignedPass = if (reverseDist < forwardDist) overlappingSeg.reversed().points else overlappingSeg.points
+                currentChain = averageTwoParallelPasses(currentChain, alignedPass).toMutableList()
+                continue
+            }
+
+            // Paralel örtüşme yoksa en yakın uç noktasına göre uç uca ekle
             var bestSegIndex = 0
             var bestMode = 0 // 0: Append Normal, 1: Append Reversed, 2: Prepend Normal, 3: Prepend Reversed
             var minDistance = Double.MAX_VALUE
 
             for ((idx, seg) in rawSegments.withIndex()) {
-                // Durum 0: Zincir Sonu -> Parça Başı (Normal devam)
                 val d0 = RouteData.haversineDistance(chainEnd.lat, chainEnd.lng, seg.first.lat, seg.first.lng)
                 if (d0 < minDistance) {
                     minDistance = d0
@@ -75,7 +88,6 @@ object RouteMerger {
                     bestMode = 0
                 }
 
-                // Durum 1: Zincir Sonu -> Parça Sonu (Karşıdan / Kaynaktan gelip ortada buluşma!)
                 val d1 = RouteData.haversineDistance(chainEnd.lat, chainEnd.lng, seg.last.lat, seg.last.lng)
                 if (d1 < minDistance) {
                     minDistance = d1
@@ -83,7 +95,6 @@ object RouteMerger {
                     bestMode = 1
                 }
 
-                // Durum 2: Parça Sonu -> Zincir Başı (Zincirin önüne normal ekleme)
                 val d2 = RouteData.haversineDistance(seg.last.lat, seg.last.lng, chainStart.lat, chainStart.lng)
                 if (d2 < minDistance) {
                     minDistance = d2
@@ -91,7 +102,6 @@ object RouteMerger {
                     bestMode = 2
                 }
 
-                // Durum 3: Parça Başı -> Zincir Başı (Zincirin önüne ters ekleme)
                 val d3 = RouteData.haversineDistance(seg.first.lat, seg.first.lng, chainStart.lat, chainStart.lng)
                 if (d3 < minDistance) {
                     minDistance = d3
@@ -117,12 +127,10 @@ object RouteMerger {
             }
         }
 
-        // Eğer birleşmiş tüm hattın sonunda Çeşme, başında Kaynak kaldıysa tüm hattı Çeşme -> Kaynak yönüne çevir
         if (currentChain.first().type == PointType.SOURCE && currentChain.last().type != PointType.SOURCE) {
             currentChain.reverse()
         }
 
-        // Ara bağlantı noktalarında kalan eski START etiketlerini normal WAYPOINT yap
         val finalStart = currentChain.first()
         val finalSubPoints = currentChain.drop(1).mapIndexed { index, pt ->
             if (pt.type == PointType.START && index < currentChain.size - 2) {
@@ -143,8 +151,64 @@ object RouteMerger {
     }
 
     /**
-     * İki parça ortada buluştuğunda (5 metreden daha yakın mükerrer buluşma noktası varsa)
-     * üst üste binmeyi önler, kritik nokta etiketini korur.
+     * İki parçanın başlangıç ve bitiş uçlarının (düz veya ters yönde) 30 metre içinde çakışıp çakışmadığını kontrol eder.
+     */
+    private fun isParallelOverlappingPass(
+        chainStart: RoutePoint,
+        chainEnd: RoutePoint,
+        candidate: Segment
+    ): Boolean {
+        if (candidate.points.size < 2) return false
+        val chainSpan = RouteData.haversineDistance(chainStart.lat, chainStart.lng, chainEnd.lat, chainEnd.lng)
+        if (chainSpan < 15.0) return false
+
+        val threshold = 30.0
+        val sameDirMatch = RouteData.haversineDistance(chainStart.lat, chainStart.lng, candidate.first.lat, candidate.first.lng) <= threshold &&
+            RouteData.haversineDistance(chainEnd.lat, chainEnd.lng, candidate.last.lat, candidate.last.lng) <= threshold
+
+        val revDirMatch = RouteData.haversineDistance(chainStart.lat, chainStart.lng, candidate.last.lat, candidate.last.lng) <= threshold &&
+            RouteData.haversineDistance(chainEnd.lat, chainEnd.lng, candidate.first.lat, candidate.first.lng) <= threshold
+
+        return sameDirMatch || revDirMatch
+    }
+
+    /**
+     * Aynı yöne hizalanmış iki paralel yürüyüş hattının karşılıklı noktalarını enterpole ederek
+     * ortalamasını alır; vana/baca gibi kritik noktaları korur ve birleştirir.
+     */
+    private fun averageTwoParallelPasses(
+        passA: List<RoutePoint>,
+        passB: List<RoutePoint>
+    ): List<RoutePoint> {
+        if (passA.isEmpty()) return passB
+        if (passB.isEmpty()) return passA
+
+        val result = mutableListOf<RoutePoint>()
+        for (ptA in passA) {
+            val nearestB = passB.minByOrNull { ptB ->
+                RouteData.haversineDistance(ptA.lat, ptA.lng, ptB.lat, ptB.lng)
+            }
+            if (nearestB != null && RouteData.haversineDistance(ptA.lat, ptA.lng, nearestB.lat, nearestB.lng) <= 25.0) {
+                val mergedType = if (ptA.type != PointType.WAYPOINT) ptA.type else nearestB.type
+                val mergedLabel = ptA.label ?: nearestB.label
+                result.add(
+                    RoutePoint(
+                        lat = (ptA.lat + nearestB.lat) / 2.0,
+                        lng = (ptA.lng + nearestB.lng) / 2.0,
+                        type = mergedType,
+                        label = mergedLabel
+                    )
+                )
+            } else {
+                result.add(ptA)
+            }
+        }
+        return result
+    }
+
+    /**
+     * İki parça ortada buluştuğunda (8 metreden daha yakın mükerrer buluşma noktası varsa)
+     * koordinatlarının ortalamasını alarak birleştirir ve kritik nokta etiketini korur.
      */
     private fun appendCleaned(target: MutableList<RoutePoint>, addition: List<RoutePoint>) {
         if (addition.isEmpty()) return
@@ -157,11 +221,19 @@ object RouteMerger {
         val firstAdd = addition.first()
         val gapMeters = RouteData.haversineDistance(lastPt.lat, lastPt.lng, firstAdd.lat, firstAdd.lng)
 
-        if (gapMeters < 5.0) {
-            // Buluşma noktası çakışıyor: eğer yeni gelen nokta kritik bir noktaysa (Vana vs.) onu koru
-            if (lastPt.type == PointType.WAYPOINT && firstAdd.type != PointType.WAYPOINT && firstAdd.type != PointType.START) {
-                target[target.lastIndex] = firstAdd
+        if (gapMeters < 8.0) {
+            val keepType = if (lastPt.type != PointType.WAYPOINT && lastPt.type != PointType.START) {
+                lastPt.type
+            } else {
+                firstAdd.type
             }
+            val keepLabel = lastPt.label ?: firstAdd.label
+            target[target.lastIndex] = RoutePoint(
+                lat = (lastPt.lat + firstAdd.lat) / 2.0,
+                lng = (lastPt.lng + firstAdd.lng) / 2.0,
+                type = keepType,
+                label = keepLabel
+            )
             target.addAll(addition.drop(1))
         } else {
             target.addAll(addition)

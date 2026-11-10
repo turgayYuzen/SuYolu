@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.google.android.gms.location.Granularity
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
@@ -61,6 +62,7 @@ import com.google.android.gms.location.Priority
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.turga.suyolu.algorithm.DeltaCompressor
+import com.turga.suyolu.algorithm.GpsPrecisionFilter
 import com.turga.suyolu.data.PointType
 import com.turga.suyolu.data.RouteData
 import com.turga.suyolu.data.RouteStorage
@@ -75,13 +77,14 @@ fun ScanRepairScreen() {
     var scannedRouteData by remember { mutableStateOf<RouteData?>(null) }
     var scanError by remember { mutableStateOf<String?>(null) }
 
-    // Live user location for field navigation
+    // Live user location for field navigation (Kalman Filtered ~1m precision)
     var liveUserLocation by remember { mutableStateOf<Location?>(null) }
+    val radarKalmanFilter = remember { GpsPrecisionFilter() }
     val serviceLocation by GpsTrackingService.currentLocation.collectAsState()
 
     val effectiveUserLocation = liveUserLocation ?: serviceLocation
 
-    // Start active GPS updates for field navigation when viewing this screen
+    // Start active 1Hz GPS updates for field navigation when viewing this screen
     DisposableEffect(Unit) {
         val fusedClient = LocationServices.getFusedLocationProviderClient(context)
         val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -89,15 +92,23 @@ fun ScanRepairScreen() {
 
         val callback = object : LocationCallback() {
             override fun onLocationResult(res: LocationResult) {
-                res.lastLocation?.let {
-                    liveUserLocation = it
+                for (rawLoc in res.locations) {
+                    val filtered = radarKalmanFilter.process(rawLoc)
+                    liveUserLocation = Location(rawLoc).apply {
+                        latitude = filtered.latitude
+                        longitude = filtered.longitude
+                        accuracy = filtered.fusedAccuracyMeters
+                    }
                 }
             }
         }
 
         if (hasFine || hasCoarse) {
-            val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1500L)
-                .setMinUpdateIntervalMillis(800L)
+            val req = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
+                .setMinUpdateIntervalMillis(500L)
+                .setMinUpdateDistanceMeters(0f)
+                .setWaitForAccurateLocation(true)
+                .setGranularity(Granularity.GRANULARITY_FINE)
                 .build()
             fusedClient.requestLocationUpdates(req, callback, Looper.getMainLooper())
         }

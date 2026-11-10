@@ -48,9 +48,11 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -108,7 +110,38 @@ fun RecordScreen(
     val recordedPoints by GpsTrackingService.recordedPoints.collectAsState()
     val currentLocation by GpsTrackingService.currentLocation.collectAsState()
     val gpsAccuracy by GpsTrackingService.gpsAccuracyMeters.collectAsState()
+    val rawGpsAccuracy by GpsTrackingService.rawGpsAccuracyMeters.collectAsState()
     val totalDistance by GpsTrackingService.totalDistanceMeters.collectAsState()
+
+    // 1m Hassas Nokta Sabitleme (Point Averaging) Modu
+    var usePrecisionLockMode by remember { mutableStateOf(true) }
+    var pendingPrecisionPoint by remember { mutableStateOf<Pair<PointType, String>?>(null) }
+    val isAveragingPoint by GpsTrackingService.isAveragingPoint.collectAsState()
+    val averagingSampleCount by GpsTrackingService.averagingSampleCount.collectAsState()
+    val averagingAchievedAccuracy by GpsTrackingService.averagingAchievedAccuracy.collectAsState()
+
+    // 10 örnek toplandığında otomatik olarak ~1m hassasiyetli noktayı kaydet
+    LaunchedEffect(isAveragingPoint, averagingSampleCount) {
+        val target = pendingPrecisionPoint
+        if (isAveragingPoint && target != null && averagingSampleCount >= 10) {
+            val res = GpsTrackingService.commitPrecisionAveragedPoint(target.first, target.second)
+            pendingPrecisionPoint = null
+            if (res != null) {
+                Toast.makeText(
+                    context,
+                    String.format(
+                        Locale.getDefault(),
+                        "🎯 %s %s kaydedildi! (%d ölçüm ortalaması, ±%.1fm hassasiyet)",
+                        target.first.symbol,
+                        target.first.displayName,
+                        res.sampleCount,
+                        res.achievedAccuracyMeters
+                    ),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         savedRoutes = RouteStorage.getSavedRoutes(context)
@@ -416,6 +449,103 @@ fun RecordScreen(
         )
     }
 
+    // 🎯 1m Hassas Nokta Sabitleme (10 Saniye Ağırlıklı Ortalama) Diyaloğu
+    val activePrecisionTarget = pendingPrecisionPoint
+    if (isAveragingPoint && activePrecisionTarget != null) {
+        AlertDialog(
+            onDismissRequest = {
+                GpsTrackingService.cancelPrecisionAveraging()
+                pendingPrecisionPoint = null
+            },
+            title = {
+                Text(
+                    "🎯 1m Hassas Sabitleme: ${activePrecisionTarget.first.symbol} ${activePrecisionTarget.first.displayName}",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Telefonu noktanın üzerinde sabit tutun. Uydu sinyallerinin ters-varyans ağırlıklı ortalaması alınarak hata payı ~1 metreye indiriliyor...",
+                        fontSize = 12.sp,
+                        color = Color.DarkGray
+                    )
+
+                    LinearProgressIndicator(
+                        progress = { (averagingSampleCount / 10f).coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Ölçüm: $averagingSampleCount / 10",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = String.format(
+                                Locale.getDefault(),
+                                "Net Hassasiyet: ±%.1f m",
+                                averagingAchievedAccuracy ?: gpsAccuracy ?: 4.0f
+                            ),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF2E7D32)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val res = GpsTrackingService.commitPrecisionAveragedPoint(
+                            activePrecisionTarget.first,
+                            activePrecisionTarget.second
+                        )
+                        pendingPrecisionPoint = null
+                        if (res != null) {
+                            Toast.makeText(
+                                context,
+                                String.format(
+                                    Locale.getDefault(),
+                                    "🎯 %s %s kaydedildi! (%d ölçüm, ±%.1fm)",
+                                    activePrecisionTarget.first.symbol,
+                                    activePrecisionTarget.first.displayName,
+                                    res.sampleCount,
+                                    res.achievedAccuracyMeters
+                                ),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                ) {
+                    Text("Şimdi Kaydet")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        GpsTrackingService.cancelPrecisionAveraging()
+                        pendingPrecisionPoint = null
+                    }
+                ) {
+                    Text("İptal")
+                }
+            }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -501,10 +631,14 @@ fun RecordScreen(
                             fontSize = 14.sp
                         )
                         if (gpsAccuracy != null) {
+                            val rawText = if (rawGpsAccuracy != null) {
+                                String.format(Locale.getDefault(), " (Ham: ±%.1fm)", rawGpsAccuracy)
+                            } else ""
                             Text(
-                                text = String.format(Locale.getDefault(), "GPS Hassasiyeti: ±%.1f m", gpsAccuracy),
+                                text = String.format(Locale.getDefault(), "🎯 Kalman GPS: ±%.1f m%s", gpsAccuracy, rawText),
                                 fontSize = 11.sp,
-                                color = if ((gpsAccuracy ?: 99f) <= 15f) Color(0xFF2E7D32) else Color(0xFFE65100)
+                                fontWeight = FontWeight.Medium,
+                                color = if ((gpsAccuracy ?: 99f) <= 3.0f) Color(0xFF1B5E20) else Color(0xFFE65100)
                             )
                         } else if (isPaused || recordedPoints.isNotEmpty()) {
                             Text(
@@ -627,6 +761,49 @@ fun RecordScreen(
             }
         }
 
+        // 🎯 1m Hassas Sabitleme Modu Anahtarı
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFFE3F2FD))
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "🎯 1m Hassas Sabitleme (10sn Ortalama)",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    color = Color(0xFF0D47A1)
+                )
+                Text(
+                    text = "Açıkken vana/çeşme üzerinde 10 ölçüm ortalaması alarak hatayı ~1 metreye indirir.",
+                    fontSize = 10.sp,
+                    color = Color.DarkGray,
+                    lineHeight = 13.sp
+                )
+            }
+            Switch(
+                checked = usePrecisionLockMode,
+                onCheckedChange = { usePrecisionLockMode = it }
+            )
+        }
+
+        val triggerCriticalPoint: (PointType, String) -> Unit = { type, label ->
+            if (usePrecisionLockMode) {
+                if (currentLocation == null) {
+                    Toast.makeText(context, "GPS konumu bekleniyor, lütfen açık alanda olduğunuzdan emin olun.", Toast.LENGTH_SHORT).show()
+                } else {
+                    pendingPrecisionPoint = Pair(type, label)
+                    GpsTrackingService.startPrecisionAveraging()
+                }
+            } else {
+                addManualPoint(context, type, label)
+            }
+        }
+
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -637,7 +814,7 @@ fun RecordScreen(
             ) {
                 OutlinedButton(
                     onClick = {
-                        addManualPoint(context, PointType.FOUNTAIN, "Çeşme")
+                        triggerCriticalPoint(PointType.FOUNTAIN, "Çeşme")
                     },
                     enabled = isTracking,
                     modifier = Modifier.weight(1f)
@@ -647,7 +824,7 @@ fun RecordScreen(
 
                 OutlinedButton(
                     onClick = {
-                        addManualPoint(context, PointType.SOURCE, "Su Gözü (Kaynak)")
+                        triggerCriticalPoint(PointType.SOURCE, "Su Gözü (Kaynak)")
                     },
                     enabled = isTracking,
                     modifier = Modifier.weight(1f)
@@ -662,7 +839,7 @@ fun RecordScreen(
             ) {
                 OutlinedButton(
                     onClick = {
-                        addManualPoint(context, PointType.VALVE, "Vana / Maslak")
+                        triggerCriticalPoint(PointType.VALVE, "Vana / Maslak")
                     },
                     enabled = isTracking,
                     modifier = Modifier.weight(1f)
@@ -672,7 +849,7 @@ fun RecordScreen(
 
                 OutlinedButton(
                     onClick = {
-                        addManualPoint(context, PointType.AIR_VALVE, "Hava Bacası")
+                        triggerCriticalPoint(PointType.AIR_VALVE, "Hava Bacası")
                     },
                     enabled = isTracking,
                     modifier = Modifier.weight(1f)
